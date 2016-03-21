@@ -1,27 +1,29 @@
-import glob
 import os
-import pprint
 import shutil
 import urllib
+from glob import glob
 
-argparser = None
 
+def run_randoop(args, javac_commands, jars):
+	print ("args %s\n" % args)
+	print ("jars %s\n" % jars)
 
-def run(args, javac_commands, jars):
-	pp = pprint.PrettyPrinter(indent=2)
 	i = 0
 	for jc in javac_commands:
 		javac_switches = jc['javac_switches']
 		cp = javac_switches['classpath']
 		class_file_dir = javac_switches['d']
-		class_files = [y for x in os.walk(class_file_dir) for y in glob.glob(os.path.join(x[0], '*.class'))]
+		class_files = [y for x in os.walk(class_file_dir) for y in glob(os.path.join(x[0], '*.class'))]
 
 		if len(class_files) == 0:
 			continue
 
-		out_dir_name = "__randoop_%04d" % (i)
-		if not os.path.exists(out_dir_name):
-			os.makedirs(out_dir_name)
+		out_dir_name = "__randoop_%04d" % i
+
+		if os.path.exists(out_dir_name):
+			shutil.rmtree(out_dir_name)
+
+		os.makedirs(out_dir_name)
 
 		class_files_file_name = os.path.join(out_dir_name, 'class_files.txt')
 		print ("Creating list of files %d in %s." % (len(class_files), os.path.abspath(out_dir_name)))
@@ -30,7 +32,7 @@ def run(args, javac_commands, jars):
 				myfile.write(get_qualified_class_name_from_file(class_file_name, class_file_dir))
 				myfile.write(os.linesep)
 
-		(randoop_jar, junit_jar, hamcrest_jar) = find_or_download_jars()
+		(randoop_jar, junit_jar, hamcrest_jar, daikon_jar) = find_or_download_jars()
 
 		cp_entries = cp.split(os.pathsep)
 		clean_cp = list()
@@ -60,22 +62,40 @@ def run(args, javac_commands, jars):
 
 		randoop_cmd = ['java', '-ea', '-classpath', os.pathsep.join(clean_cp),
 		               "randoop.main.Main", "gentests", "--classlist=%s" % class_files_file_name,
-		               "--timelimit=60", "--silently-ignore-bad-class-names=true",
+		               "--timelimit=1", "--junit-reflection-allowed=false", "--silently-ignore-bad-class-names=true",
 		               "--junit-output-dir=%s" % out_dir_name]
 
 		junit_cp = list(clean_cp)
 		junit_cp.append(junit_jar)
-		junit_build_cmd = ['javac', '-classpath', os.pathsep.join(junit_cp),
-		                   os.path.join(out_dir_name, 'RandoopTest*.java'), '-d', out_dir_name]
+		junit_build_cmd = ['javac', '-g', '-classpath',
+		                   os.pathsep.join(junit_cp), os.path.join(out_dir_name, '*.java'),
+		                   '-d', out_dir_name]
+
+		# setups daikon.Chicory's classpath (including jar component)
+		chicory_cp = list(clean_cp)
+		chicory_cp.append(daikon_jar)
+		chicory_cp.append(hamcrest_jar)
+		chicory_cp.append(out_dir_name)
+
+		# specifies output directory
+		chicory_run_cp = list(chicory_cp)
+		chicory_run_cp.append(out_dir_name)
+
+		# daikon.Chicory's execution command
+		chicory_cmd = ['java', '-classpath',
+		               os.pathsep.join(chicory_run_cp), 'daikon.Chicory',
+		               '--daikon', 'RegressionTestDriver']
 
 		junit_run_cp = list(junit_cp)
 		junit_run_cp.append(hamcrest_jar)
 		junit_run_cp.append(out_dir_name)
 
-		junit_run_cmd = ['java', '-classpath', os.pathsep.join(junit_run_cp), "org.junit.runner.JUnitCore",
-		                 'RandoopTest']
+		junit_run_cmd = ['java',
+		                 '-classpath', os.pathsep.join(junit_run_cp),
+		                 "org.junit.runner.JUnitCore", 'RegressionTestDriver']
 
-		bash_script_name = "run_randoop_%04d.sh" % (i)
+		timeout = "(sleep 20; kill $$) & exec "
+		bash_script_name = "run_randoop_%04d.sh" % i
 		with open(bash_script_name, mode='w') as myfile:
 			myfile.write("#!/bin/bash\n")
 			myfile.write("echo \"Run Randoop\"\n")
@@ -87,30 +107,32 @@ def run(args, javac_commands, jars):
 			myfile.write("echo \"Run tests\"\n")
 			myfile.write(" ".join(junit_run_cmd))
 			myfile.write("\n")
+			myfile.write("echo \"Run Daikon\"\n")
+			myfile.write(timeout)
+			myfile.write(" ".join(chicory_cmd))
+			myfile.write("\n")
 		print ("Written script to %s" % bash_script_name)
 
 		i += 1
 
 
 def get_qualified_class_name_from_file(class_file_name, class_file_path):
-	""" terrible hack for now """
+	# terrible hack for now
 	suffix = class_file_name.replace(class_file_path + os.sep, "")
 	mid_section = suffix.replace(".class", "")
 	return mid_section.replace(os.sep, ".")
 
 
 def find_or_download_jars():
-	'''
-		Finds or downloads the randoop, junit, and hamrest jars.
-	'''
-	randoop_jar_dir = os.path.join(os.getcwd(), '__randoop_files')
+	""" Finds or downloads the randoop, junit, and hamrest jars. """
+	randoop_jar_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)), '__randoop_files')
 	if not os.path.isdir(randoop_jar_dir):
 		os.makedirs(randoop_jar_dir)
 
-	randoop_jar = os.path.join(randoop_jar_dir, "randoop-2.0.jar")
+	randoop_jar = os.path.join(randoop_jar_dir, "randoop.jar")
 	if not os.path.isfile(randoop_jar):
 		print("Downloading randoop to %s" % randoop_jar)
-		urllib.urlretrieve("https://github.com/randoop/randoop/releases/download/v2.0/randoop-2.0.jar", randoop_jar)
+		urllib.urlretrieve("https://github.com/randoop/randoop/releases/download/v2.1.4/randoop-2.1.4.jar", randoop_jar)
 
 	junit_jar = os.path.join(randoop_jar_dir, "junit-4.12.jar")
 	if not os.path.isfile(junit_jar):
@@ -122,6 +144,12 @@ def find_or_download_jars():
 		print("Downloading hamcrest to %s" % hamcrest_jar)
 		urllib.urlretrieve(
 			"http://search.maven.org/remotecontent?filepath=org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar",
-			hamcrest_jar)
+			hamcrest_jar
+		)
 
-	return (randoop_jar, junit_jar, hamcrest_jar)
+	daikon_jar = os.path.join(randoop_jar_dir, "daikon.jar")
+	if not os.path.isfile(daikon_jar):
+		print("Downloading daikon 5.2.22 %s" % daikon_jar)
+		urllib.urlretrieve("http://plse.cs.washington.edu/daikon/download/daikon.jar", daikon_jar)
+
+	return randoop_jar, junit_jar, hamcrest_jar, daikon_jar
