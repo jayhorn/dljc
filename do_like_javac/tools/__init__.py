@@ -16,6 +16,8 @@ TOOLS = {
 
 
 def parsers():
+	# Important note: new tools added to dljc MUST have the 'argparser' attribute
+	# Failing to do will cause ImportError errors.
 	return [mod.argparser for name, mod in TOOLS.iteritems() if mod.argparser]
 
 

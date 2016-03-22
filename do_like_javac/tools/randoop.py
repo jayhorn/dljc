@@ -3,6 +3,8 @@ import shutil
 import urllib
 from glob import glob
 
+argparser = None
+
 
 def run_randoop(args, javac_commands, jars):
 	print ("args %s\n" % args)
