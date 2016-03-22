@@ -1,14 +1,24 @@
+import fnmatch
 import os
 import shutil
 import urllib
 from glob import glob
 
+import subprocess32 as subprocess
+
 argparser = None
 
 
-def run_randoop(args, javac_commands, jars):
+def run(args, javac_commands, jars):
 	print ("args %s\n" % args)
 	print ("jars %s\n" % jars)
+
+	# The assumption is there is a classes folder
+	# produced by ant.
+	current_dir = os.path.dirname("classes")
+	file_dir = os.path.abspath(os.path.join(current_dir, "../"))
+
+	print(current_dir)
 
 	i = 0
 	for jc in javac_commands:
@@ -117,12 +127,33 @@ def run_randoop(args, javac_commands, jars):
 
 		i += 1
 
+	run_randoop(file_dir)
+
 
 def get_qualified_class_name_from_file(class_file_name, class_file_path):
 	# terrible hack for now
 	suffix = class_file_name.replace(class_file_path + os.sep, "")
 	mid_section = suffix.replace(".class", "")
 	return mid_section.replace(os.sep, ".")
+
+
+def run_cmd(cmd, directory):
+	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=directory)
+	try:
+		out, err = p.communicate(timeout=1200)
+		print (err)
+	except subprocess.TimeoutExpired as err:
+		print err
+
+
+def run_randoop(current_dir):
+	print("About to run Randoop")
+	for base_dir, between, file_name in os.walk(current_dir):
+		for cf in fnmatch.filter(file_name, 'run_randoop_*'):
+			working_dir = os.path.abspath(base_dir)
+			print ("Running Randoop for {}".format(working_dir))
+			run_cmd(["chmod", "a+x", os.path.join(working_dir, cf)], os.path.abspath(base_dir))
+			run_cmd(["./{}".format(cf)], os.path.abspath(base_dir))
 
 
 def find_or_download_jars():
